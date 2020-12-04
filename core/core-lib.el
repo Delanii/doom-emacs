@@ -82,53 +82,6 @@ Accepts the same arguments as `message'."
                  format-string)
         ,@args))))
 
-(defun doom-try-run-hook (hook)
-  "Run HOOK (a hook function) with better error handling.
-Meant to be used with `run-hook-wrapped'."
-  (doom-log "Running doom hook: %s" hook)
-  (condition-case e
-      (funcall hook)
-    ((debug error)
-     (signal 'doom-hook-error (list hook e))))
-  ;; return nil so `run-hook-wrapped' won't short circuit
-  nil)
-
-(defun doom-load-envvars-file (file &optional noerror)
-  "Read and set envvars from FILE.
-If NOERROR is non-nil, don't throw an error if the file doesn't exist or is
-unreadable. Returns the names of envvars that were changed."
-  (if (null (file-exists-p file))
-      (unless noerror
-        (signal 'file-error (list "No envvar file exists" file)))
-    (when-let
-        (env
-         (with-temp-buffer
-           (save-excursion
-             (setq-local coding-system-for-read 'utf-8)
-             (insert "\0\n") ; to prevent off-by-one
-             (insert-file-contents file))
-           (save-match-data
-             (when (re-search-forward "\0\n *\\([^#= \n]*\\)=" nil t)
-               (setq
-                env (split-string (buffer-substring (match-beginning 1) (point-max))
-                                  "\0\n"
-                                  'omit-nulls))))))
-      (setq-default
-       process-environment
-       (append (nreverse env)
-               (default-value 'process-environment))
-       exec-path
-       (append (split-string (getenv "PATH") path-separator t)
-               (list exec-directory))
-       shell-file-name
-       (or (getenv "SHELL")
-           (default-value 'shell-file-name)))
-      env)))
-
-
-;;
-;;; Functional library
-
 (defalias 'doom-partial #'apply-partially)
 
 (defun doom-rpartial (fn &rest args)
@@ -487,19 +440,6 @@ advised)."
               (put ',fn 'permanent-local-hook t)
               (add-hook sym #',fn ,append))))))
 
-(defmacro add-hook-trigger! (hook-var &rest targets)
-  "TODO"
-  `(let ((fn (intern (format "%s-h" ,hook-var))))
-     (fset
-      fn (lambda (&rest _)
-           (run-hook-wrapped ,hook-var #'doom-try-run-hook)
-           (set ,hook-var nil)))
-     (put ,hook-var 'permanent-local t)
-     (dolist (on (list ,@targets))
-       (if (functionp on)
-           (advice-add on :before fn)
-         (add-hook on fn)))))
-
 (defmacro add-hook! (hooks &rest rest)
   "A convenience macro for adding N functions to M hooks.
 
@@ -670,6 +610,28 @@ set earlier in the ‘setq-local’.  The return value of the
                expr))
         (setq pairs (cdr (cdr pairs))))
       (macroexp-progn (nreverse expr)))))
+
+(eval-when! (version< emacs-version "27.1")
+  ;; DEPRECATED Backported from Emacs 27; earlier verisons don't have REMOTE arg
+  (defun executable-find (command &optional remote)
+    "Search for COMMAND in `exec-path' and return the absolute file name.
+Return nil if COMMAND is not found anywhere in `exec-path'.  If
+REMOTE is non-nil, search on the remote host indicated by
+`default-directory' instead."
+    (if (and remote (file-remote-p default-directory))
+        (let ((res (locate-file
+                    command
+                    (mapcar
+                     (lambda (x) (concat (file-remote-p default-directory) x))
+                     (exec-path))
+                    exec-suffixes 'file-executable-p)))
+          (when (stringp res) (file-local-name res)))
+      ;; Use 1 rather than file-executable-p to better match the
+      ;; behavior of call-process.
+      (let ((default-directory
+              (let (file-name-handler-alist)
+                (file-name-quote default-directory))))
+        (locate-file command exec-path exec-suffixes 1)))))
 
 (provide 'core-lib)
 ;;; core-lib.el ends here
